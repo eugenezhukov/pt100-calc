@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Пересчёт температуры, сопротивления Pt100/100П, тока 4–20 мА и показаний вторичного прибора">
+<title>Pt100 → 4–20 мА</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@400;500;600&display=swap">
+<style>
+/* Layout: calibrator strip — editable readouts on top, four bands sharing one temperature axis, details below */
+:root{
+  --bg:#edf0f3; --panel:#ffffff; --ink:#17202a; --mute:#5b6673; --line:#cdd3da; --track:#dde2e8;
+  --temp:#c2410c; --res:#3f6676; --cur:#1d4ed8; --err:#8a5a00; --disp:#6d28d9; --ok:#15803d; --warn:#a16207; --bad:#b91c1c; --cursor:#17202a;
+  --f-ui:"IBM Plex Sans Condensed","Arial Narrow","Roboto Condensed",sans-serif;
+  --f-num:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#10151b; --panel:#171f28; --ink:#e3e8ee; --mute:#93a0ad; --line:#2d3845; --track:#26313d;
+  --temp:#fb8b50; --res:#8fb6c6; --cur:#86a8ff; --err:#e0b34a; --disp:#b69cff; --ok:#4ade80; --warn:#facc15; --bad:#f87171; --cursor:#e3e8ee; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#10151b; --panel:#171f28; --ink:#e3e8ee; --mute:#93a0ad; --line:#2d3845; --track:#26313d;
+  --temp:#fb8b50; --res:#8fb6c6; --cur:#86a8ff; --err:#e0b34a; --disp:#b69cff; --ok:#4ade80; --warn:#facc15; --bad:#f87171; --cursor:#e3e8ee; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{margin:0}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-ui);font-size:15px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:24px 40px}
+.wrap{max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+h1{margin:0;font-weight:600;font-size:1.7rem;letter-spacing:.01em;text-wrap:balance}
+h1 span{color:var(--mute);font-weight:400}
+.sub{margin:2px 0 0;color:var(--mute);font-size:.92rem}
+
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--panel)}
+.seg button{font:inherit;font-size:.85rem;border:0;background:transparent;color:var(--mute);padding:6px 12px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.seg button:focus-visible{outline:2px solid var(--cur);outline-offset:-2px}
+
+.readouts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.ctl{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.ro{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.ro label{font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;color:var(--mute);display:flex;align-items:center;gap:7px}
+.ro label i{width:10px;height:3px;border-radius:2px;display:inline-block}
+.ro .val{display:flex;align-items:baseline;gap:6px;min-width:0}
+.ro input{font-family:var(--f-num);font-weight:500;font-size:2.1rem;font-variant-numeric:tabular-nums;color:var(--ink);
+  background:transparent;border:0;border-bottom:1px dashed transparent;padding:0;width:100%;min-width:0;-moz-appearance:textfield}
+.ro input::-webkit-outer-spin-button,.ro input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.ro input:hover{border-bottom-color:var(--line)}
+.ro input:focus{outline:none;border-bottom-color:currentColor}
+.ro .unit{font-family:var(--f-num);color:var(--mute);font-size:1.05rem}
+.ro small{color:var(--mute);font-size:.78rem;font-family:var(--f-num)}
+#roD input{color:var(--disp)} #roT input{color:var(--temp)} #roR input{color:var(--res)} #roI input{color:var(--cur)}
+
+.strip{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 0 2px}
+#scale{display:block;width:100%;touch-action:none;cursor:ew-resize;user-select:none}
+#scale:focus{outline:none}
+#scale:focus-visible{outline:2px solid var(--cur);outline-offset:2px;border-radius:6px}
+.hint{color:var(--mute);font-size:.8rem;padding:0 16px 8px}
+
+.details{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.d{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;min-width:0}
+.d h3{margin:0 0 4px;font-size:.72rem;text-transform:uppercase;letter-spacing:.09em;color:var(--mute);font-weight:500}
+.d .n{font-family:var(--f-num);font-size:1.15rem;font-variant-numeric:tabular-nums}
+.d p{margin:4px 0 0;color:var(--mute);font-size:.84rem;max-width:65ch}
+.note{color:var(--mute);font-size:.84rem;max-width:80ch;margin:0}
+.note code{font-family:var(--f-num);font-size:.82rem;color:var(--ink)}
+
+.cfg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.cfgc{display:flex;flex-direction:column;gap:10px}
+.cfgc h3{display:flex;align-items:center;gap:7px}
+.cfgc h3 i{width:10px;height:3px;border-radius:2px;display:inline-block}
+.lims{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 18px}
+.lims label{display:flex;flex-direction:column;gap:1px;font-size:.72rem;letter-spacing:.06em;color:var(--mute)}
+.lims .f{display:flex;align-items:baseline;gap:4px}
+.lims input{font-family:var(--f-num);font-size:1.35rem;font-variant-numeric:tabular-nums;color:var(--ink);width:6.5ch;
+  background:transparent;border:0;border-bottom:1px solid var(--line);padding:0 0 1px;-moz-appearance:textfield}
+.lims input::-webkit-outer-spin-button,.lims input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.lims input:focus{outline:none;border-bottom-color:var(--ink)}
+.lims .u{font-family:var(--f-num);color:var(--mute);font-size:.9rem}
+.lims .dash{font-family:var(--f-num);color:var(--mute);padding-bottom:4px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button{font:inherit;font-size:.8rem;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:4px;padding:3px 9px;cursor:pointer}
+.chips button:hover{border-color:var(--mute)}
+.chips button:focus-visible{outline:2px solid var(--cur);outline-offset:1px}
+.status{display:flex;align-items:flex-start;gap:8px;font-size:.86rem;line-height:1.4}
+.status b{flex:none;font-family:var(--f-ui);font-weight:600;font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;border:1px solid currentColor;border-radius:4px;padding:1px 6px;margin-top:1px}
+.status.ok b{color:var(--ok)} .status.warn b{color:var(--warn)} .status.bad b{color:var(--bad)}
+.status code{font-family:var(--f-num);font-size:.84rem}
+@media (max-width:760px){.cfg{grid-template-columns:1fr}}
+svg text{font-family:var(--f-num);font-variant-numeric:tabular-nums}
+.t-name{font-family:var(--f-ui);font-size:11px;letter-spacing:.09em;fill:var(--mute)}
+.t-lbl{font-size:11px;fill:var(--mute)}
+.tick{stroke:var(--mute);stroke-width:1}
+.track{stroke:var(--track);stroke-width:6;stroke-linecap:round}
+.gridl{stroke:var(--line);stroke-width:1;stroke-dasharray:2 3}
+
+@media (max-width:960px){.readouts{grid-template-columns:repeat(2,minmax(0,1fr))}.ctl{align-items:flex-start}}
+@media (max-width:640px){
+  .readouts{grid-template-columns:1fr}
+  .ro input{font-size:1.8rem}
+  h1{font-size:1.4rem}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Pt100 <span>→</span> 4–20 мА</h1>
+      <p class="sub">Тащите шкалу или стрелками ← →. Значения и пределы можно вводить вручную.</p>
+    </div>
+    <div class="ctl">
+      <div class="seg" role="group" aria-label="Характеристика датчика">
+        <button type="button" id="a385" aria-pressed="true">Pt100 · α 0,00385</button>
+        <button type="button" id="a391" aria-pressed="false">100П · α 0,00391</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="cfg">
+    <div class="d cfgc">
+      <h3><i style="background:var(--cur)"></i>Преобразователь Pt100 → 4–20 мА</h3>
+      <div class="lims">
+        <label for="tx0">НПИ (4 мА)<span class="f"><input id="tx0" type="number" step="1" inputmode="decimal"><span class="u">°C</span></span></label>
+        <span class="dash">…</span>
+        <label for="tx1">ВПИ (20 мА)<span class="f"><input id="tx1" type="number" step="1" inputmode="decimal"><span class="u">°C</span></span></label>
+        <div class="seg" role="group" aria-label="Режим преобразователя">
+          <button type="button" id="mLin" aria-pressed="true">С линеаризацией</button>
+          <button type="button" id="mRaw" aria-pressed="false">Линейно по Ω</button>
+        </div>
+      </div>
+      <div class="chips">
+        <button type="button" data-tx="-50,250,raw">Старый: −50…250, по Ω</button>
+        <button type="button" data-tx="-50,150,lin">Новый: −50…150, лин.</button>
+        <button type="button" data-tx="-50,250,lin">−50…250, лин.</button>
+        <button type="button" data-tx="0,200,lin">0…200, лин.</button>
+      </div>
+    </div>
+    <div class="d cfgc">
+      <h3><i style="background:var(--disp)"></i>Вторичный прибор, вход 4–20 мА</h3>
+      <div class="lims">
+        <label for="d0">Показание при 4 мА<span class="f"><input id="d0" type="number" step="1" inputmode="decimal"><span class="u">°C</span></span></label>
+        <span class="dash">…</span>
+        <label for="d1">Показание при 20 мА<span class="f"><input id="d1" type="number" step="1" inputmode="decimal"><span class="u">°C</span></span></label>
+      </div>
+      <div class="chips">
+        <button type="button" id="dMatch">= пределы преобразователя</button>
+        <button type="button" data-d="-50,250">−50…250</button>
+        <button type="button" data-d="-50,150">−50…150</button>
+        <button type="button" data-d="0,200">0…200</button>
+      </div>
+      <div class="status" id="match"></div>
+    </div>
+  </section>
+
+  <section class="readouts">
+    <div class="ro" id="roT">
+      <label for="inT"><i style="background:var(--temp)"></i>Температура</label>
+      <div class="val"><input id="inT" type="number" step="0.1" min="-50" max="250" inputmode="decimal"><span class="unit">°C</span></div>
+      <small>диапазон −50 … +250 °C</small>
+    </div>
+    <div class="ro" id="roR">
+      <label for="inR"><i style="background:var(--res)"></i>Сопротивление</label>
+      <div class="val"><input id="inR" type="number" step="0.01" inputmode="decimal"><span class="unit">Ω</span></div>
+      <small id="rRange"></small>
+    </div>
+    <div class="ro" id="roI">
+      <label for="inI"><i style="background:var(--cur)"></i>Выход</label>
+      <div class="val"><input id="inI" type="number" step="0.001" min="3.8" max="20.5" inputmode="decimal"><span class="unit">мА</span></div>
+      <small id="pct"></small>
+    </div>
+    <div class="ro" id="roD">
+      <label for="inD"><i style="background:var(--disp)"></i>Вторичный прибор</label>
+      <div class="val"><input id="inD" type="number" step="0.1" inputmode="decimal"><span class="unit">°C</span></div>
+      <small id="dErr"></small>
+    </div>
+  </section>
+
+  <section class="strip">
+    <svg id="scale" role="slider" tabindex="0" aria-label="Температура" aria-valuemin="-50" aria-valuemax="250"></svg>
+    <div class="hint">Шаг: ← → 0,1 °C · Shift 1 °C · PgUp/PgDn 10 °C · Home/End — края шкалы</div>
+  </section>
+
+  <section class="details">
+    <div class="d"><h3>Чувствительность dR/dT</h3><div class="n" id="sens"></div>
+      <p>Крутизна падает с ростом температуры (член B&nbsp;&lt;&nbsp;0), поэтому деления Ω на шкале чуть сгущаются вправо.</p></div>
+    <div class="d"><h3>Без линеаризации</h3><div class="n" id="lin"></div>
+      <p id="linP"></p></div>
+    <div class="d"><h3>Допуск датчика, класс A / B</h3><div class="n" id="tol"></div>
+      <p>МЭК 60751 / ГОСТ 6651: A ±(0,15 + 0,002|t|), B ±(0,30 + 0,005|t|) °C.</p></div>
+    <div class="d"><h3>Масштаб токового выхода</h3><div class="n" id="span"></div>
+      <p id="spanP"></p></div>
+  </section>
+
+  <p class="note" id="formula"></p>
+</div>
+
+<script>
+(function(){
+  const TMIN=-50, TMAX=250, R0=100;
+  const ILO=3.8, IHI=20.5;              // NAMUR NE43 saturation limits
+  const COEF={
+    '385':{A:3.9083e-3,B:-5.775e-7,C:-4.183e-12,name:'Pt100, α = 0,00385'},
+    '391':{A:3.9690e-3,B:-5.841e-7,C:-4.330e-12,name:'100П, α = 0,00391'}
+  };
+  // state; transmitter TX0…TX1 → 4…20 мА, instrument 4…20 мА → D0…D1
+  const S={alpha:'385',lin:true,TX0:-50,TX1:150,D0:-50,D1:250};
+  let T=20.0;
+  try{const v=JSON.parse(localStorage.getItem('pt100cfg')||'null');if(v&&typeof v==='object')for(const k in S)if(k in v)S[k]=v[k];}catch(e){}
+  const save=()=>{try{localStorage.setItem('pt100cfg',JSON.stringify(S));}catch(e){}};
+
+  const Rt=t=>{const k=COEF[S.alpha];let r=1+k.A*t+k.B*t*t;if(t<0)r+=k.C*(t-100)*t*t*t;return R0*r;};
+  const dRt=t=>{const k=COEF[S.alpha];return R0*(k.A+2*k.B*t+(t<0?k.C*(4*t*t*t-300*t*t):0));};
+  const TofR=r=>{let t=(r/R0-1)/COEF[S.alpha].A;for(let i=0;i<40;i++){const d=(Rt(t)-r)/dRt(t);t-=d;if(Math.abs(d)<1e-10)break;}return t;};
+  const clampT=t=>Math.min(TMAX,Math.max(TMIN,t));
+  const clampI=i=>Math.min(IHI,Math.max(ILO,i));
+  const fmt=(v,d)=>(Math.abs(v)<0.5*Math.pow(10,-d)?0:v).toFixed(d).replace('-','−');
+  const fmtc=(v,d)=>fmt(v,d).replace('.',',');
+  const fnum=v=>fmtc(v,Number.isInteger(v)?0:1);
+
+  // transmitter
+  const RX0=()=>Rt(S.TX0), RX1=()=>Rt(S.TX1);
+  const ItxLin=t=>4+16*(t-S.TX0)/(S.TX1-S.TX0);
+  const ItxRaw=t=>4+16*(Rt(t)-RX0())/(RX1()-RX0());
+  const Iraw=t=>S.lin?ItxLin(t):ItxRaw(t);
+  const Iout=t=>clampI(Iraw(t));
+  const TofIraw=i=>S.lin?S.TX0+(i-4)*(S.TX1-S.TX0)/16:TofR(RX0()+(i-4)/16*(RX1()-RX0()));
+  // instrument
+  const DofI=i=>S.D0+(S.D1-S.D0)*(i-4)/16;
+  const IofD=v=>4+16*(v-S.D0)/(S.D1-S.D0);
+  const Disp=t=>DofI(Iout(t));
+  // chord error of a transmitter without linearization, over its own range
+  const Tchord=t=>S.TX0+(S.TX1-S.TX0)*(Rt(t)-RX0())/(RX1()-RX0());
+  const errAt=t=>Tchord(t)-t;
+
+  const svg=document.getElementById('scale');
+  const NS='http://www.w3.org/2000/svg';
+  let W=800, xL=30, xR=770, staticG, dynG, errMax=4, eA=TMIN, eB=TMAX;
+  const BAND=[{y:6,h:74},{y:84,h:74},{y:162,h:74},{y:240,h:74},{y:318,h:96}];
+  const H=420;
+  const xT=t=>xL+(t-TMIN)/(TMAX-TMIN)*(xR-xL);
+  const tX=x=>TMIN+(x-xL)/(xR-xL)*(TMAX-TMIN);
+  const clipX=x=>Math.min(xR,Math.max(xL,x));
+
+  function el(tag,attrs,parent,text){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(text!=null)e.textContent=text;parent&&parent.appendChild(e);return e;}
+  function niceStep(raw){const p=Math.pow(10,Math.floor(Math.log10(raw)));for(const m of [1,2,2.5,5,10])if(m*p>=raw-1e-12)return m*p;return 10*p;}
+  function decimals(step){let d=0;while(d<3&&Math.abs(step*Math.pow(10,d)-Math.round(step*Math.pow(10,d)))>1e-6)d++;return d;}
+
+  function drawStatic(){
+    W=Math.max(320,svg.parentElement.clientWidth);
+    const pad=W<520?22:30; xL=pad; xR=W-pad;
+    svg.setAttribute('viewBox',`0 0 ${W} ${H}`); svg.setAttribute('height',H);
+    svg.innerHTML='';
+    const defs=el('defs',{},svg);
+    const pt=el('pattern',{id:'hatch',width:6,height:6,patternUnits:'userSpaceOnUse',patternTransform:'rotate(45)'},defs);
+    el('line',{x1:0,y1:0,x2:0,y2:6,stroke:'var(--mute)','stroke-opacity':.35,'stroke-width':2},pt);
+    staticG=el('g',{},svg); dynG=el('g',{},svg);
+    const narrow=W<560, wide=W>860, nameX=xL-(narrow?14:18);
+
+    function axis(b,name){
+      const ay=b.y+30;
+      el('text',{x:nameX,y:b.y+12,class:'t-name'},staticG,name);
+      el('line',{x1:xL,y1:ay,x2:xR,y2:ay,class:'track'},staticG);
+      return ay;
+    }
+    function tick(x,ay,major,label){
+      el('line',{x1:x,y1:ay+5,x2:x,y2:ay+(major?14:9),class:'tick','stroke-opacity':major?1:.55},staticG);
+      if(label!=null){
+        const anchor=x-xL<10?'start':(xR-x<10?'end':'middle');
+        el('text',{x:x,y:ay+27,class:'t-lbl','text-anchor':anchor},staticG,label);
+      }
+    }
+    // generic scale: values v0…v1 placed by toX, step picked from pixel density
+    function scale(ay,v0,v1,toX){
+      const px=Math.abs(toX(v1)-toX(v0))/Math.abs(v1-v0);
+      if(!(px>0))return;
+      const L=niceStep((narrow?40:52)/px), dL=decimals(L);
+      const sub=L*px/5>=6?5:(L*px/2>=6?2:1), m=L/sub;
+      const lo=Math.min(v0,v1), hi=Math.max(v0,v1);
+      const n0=Math.ceil(lo/m-1e-9), n1=Math.floor(hi/m+1e-9);
+      if(n1-n0>2000)return;
+      for(let n=n0;n<=n1;n++){
+        const v=n*m, x=toX(v);
+        if(x<xL-.5||x>xR+.5)continue;
+        const isLab=Math.abs(v/L-Math.round(v/L))<1e-6;
+        tick(x,ay,isLab,isLab?fmt(v,dL):null);
+      }
+    }
+    // hatched zones where the loop current is outside 4…20 мА
+    const xI4=xT(TofIraw(4)), xI20=xT(TofIraw(20));
+    function outZones(b,name,txt){
+      const ay=b.y+30;
+      if(xI4>xL){const x=clipX(xI4);
+        el('rect',{x:xL,y:ay-7,width:x-xL,height:24,fill:'url(#hatch)'},staticG);
+        if(xI4<xR)el('line',{x1:x,y1:ay-9,x2:x,y2:ay+18,stroke:'var(--mute)','stroke-width':1,'stroke-dasharray':'3 2'},staticG);}
+      if(xI20<xR){const x=clipX(xI20);
+        el('rect',{x:x,y:ay-7,width:xR-x,height:24,fill:'url(#hatch)'},staticG);
+        if(xI20>xL)el('line',{x1:x,y1:ay-9,x2:x,y2:ay+18,stroke:'var(--mute)','stroke-width':1,'stroke-dasharray':'3 2'},staticG);
+        const tw=txt.length*7, nameEnd=nameX+name.length*6.8+16;
+        if(xR-Math.max(x,nameEnd)>tw)el('text',{x:xR,y:b.y+12,class:'t-name','text-anchor':'end'},staticG,txt);}
+    }
+    function satMarks(ay){
+      for(const i of [ILO,IHI]){const x=xT(TofIraw(i));
+        if(x>=xL&&x<=xR)el('line',{x1:x,y1:ay+5,x2:x,y2:ay+14,stroke:'var(--cur)','stroke-width':2},staticG);}
+    }
+
+    // Temperature band
+    let ay=axis(BAND[0],'ТЕМПЕРАТУРА, °C');
+    for(let t=TMIN;t<=TMAX;t+=narrow?10:5){
+      const major=t%50===0; tick(xT(t),ay,major,major||(wide&&t%25===0)?fmt(t,0):null);
+    }
+    // Resistance band — tick positions follow R(T), so spacing is non-uniform
+    ay=axis(BAND[1],'СОПРОТИВЛЕНИЕ, Ω');
+    const rA=Rt(TMIN), rB=Rt(TMAX);
+    const rMinor=narrow?5:(wide?1:2), rLab=narrow?20:10;
+    for(let r=Math.ceil(rA/rMinor)*rMinor;r<=rB+1e-9;r+=rMinor){
+      const isLab=Math.abs(r%rLab)<1e-9, major=Math.abs(r%10)<1e-9;
+      tick(xT(TofR(r)),ay,major,isLab?fmt(r,0):null);
+    }
+    {const x=xT(0);el('line',{x1:x,y1:BAND[1].y+18,x2:x,y2:BAND[1].y+24,stroke:'var(--res)','stroke-width':2},staticG);}
+
+    // Current band
+    const nI=narrow?'ТОК, мА':`ТОК, мА  (${fnum(S.TX0)}…${fnum(S.TX1)} °C → 4–20${S.lin?'':', по Ω'})`;
+    ay=axis(BAND[2],nI);
+    outZones(BAND[2],nI,'ВНЕ 4–20 мА');
+    satMarks(ay);
+    scale(ay,4,20,i=>xT(TofIraw(i)));
+
+    // Secondary instrument band — reading v sits where the loop current equals I(v)
+    const nD=narrow?'ВТОРИЧНЫЙ ПРИБОР, °C':`ВТОРИЧНЫЙ ПРИБОР, °C  (4–20 мА → ${fnum(S.D0)}…${fnum(S.D1)})`;
+    ay=axis(BAND[3],nD);
+    outZones(BAND[3],nD,'ВНЕ ШКАЛЫ');
+    scale(ay,S.D0,S.D1,v=>xT(TofIraw(IofD(v))));
+
+    // Error band — chord over the transmitter range, shown where it overlaps the axis
+    const b=BAND[4];
+    el('text',{x:nameX,y:b.y+12,class:'t-name'},staticG,narrow?'ОШИБКА БЕЗ ЛИНЕАРИЗАЦИИ, °C':`ОШИБКА БЕЗ ЛИНЕАРИЗАЦИИ, °C  (хорда ${fnum(S.TX0)}…${fnum(S.TX1)} °C)`);
+    eA=Math.max(TMIN,S.TX0); eB=Math.min(TMAX,S.TX1);
+    let m=0; for(let t=eA;t<=eB;t+=0.5)m=Math.max(m,errAt(t));
+    errMax=m<=0.25?0.25:(m<=0.5?0.5:(m<=1?1:(m<=2?2:Math.ceil(m))));
+    const gStep=errMax<=0.5?errMax/2:(errMax<=2?0.5:1), gd=decimals(gStep);
+    const y0=b.y+b.h-14, y1=b.y+24;
+    const yE=e=>y0-(e/errMax)*(y0-y1);
+    for(let k=0;k*gStep<=errMax+1e-9;k++){const e=k*gStep;
+      el('line',{x1:xL,y1:yE(e),x2:xR,y2:yE(e),class:'gridl'},staticG);
+      el('text',{x:xR,y:yE(e)-3,class:'t-lbl','text-anchor':'end'},staticG,'+'+fmtc(e,gd));
+    }
+    if(eB-eA>=1){
+      let dp='', ap=`M${xT(eA).toFixed(1)},${y0} `;
+      const N=Math.max(2,Math.ceil((eB-eA)/2));
+      for(let k=0;k<=N;k++){const t=eA+(eB-eA)*k/N,x=xT(t).toFixed(1),y=yE(errAt(t)).toFixed(1);dp+=(k?'L':'M')+x+','+y+' ';ap+='L'+x+','+y+' ';}
+      ap+=`L${xT(eB).toFixed(1)},${y0} Z`;
+      el('path',{d:ap,fill:'var(--err)','fill-opacity':.12,stroke:'none'},staticG);
+      el('path',{d:dp,fill:'none',stroke:'var(--err)','stroke-width':1.8},staticG);
+    }
+    svg._yE=yE;
+    drawDyn();
+  }
+
+  function drawDyn(){
+    if(!dynG)return;
+    dynG.innerHTML='';
+    const x=xT(T);
+    const colors=['var(--temp)','var(--res)','var(--cur)','var(--disp)'];
+    BAND.slice(0,4).forEach((b,k)=>{
+      el('line',{x1:xL,y1:b.y+30,x2:x,y2:b.y+30,stroke:colors[k],'stroke-width':6,'stroke-linecap':'round'},dynG);
+    });
+    el('line',{x1:x,y1:BAND[0].y+18,x2:x,y2:BAND[4].y+BAND[4].h-14,stroke:'var(--cursor)','stroke-width':1.2},dynG);
+    el('rect',{x:x-7,y:BAND[0].y+22,width:14,height:16,rx:3,fill:'var(--panel)',stroke:'var(--cursor)','stroke-width':1.5},dynG);
+    el('line',{x1:x,y1:BAND[0].y+26,x2:x,y2:BAND[0].y+34,stroke:'var(--cursor)','stroke-width':1.2},dynG);
+    const flag=(y,txt,color)=>{
+      const w=txt.length*6.9+10;
+      let fx=x+9; if(fx+w>xR+20) fx=x-9-w;
+      el('rect',{x:fx,y:y+3,width:w,height:16,rx:3,fill:color},dynG);
+      el('text',{x:fx+5,y:y+15,'font-size':11.5,fill:'var(--panel)'},dynG,txt);
+    };
+    flag(BAND[0].y,fmt(T,1)+' °C','var(--temp)');
+    flag(BAND[1].y,fmt(Rt(T),2)+' Ω','var(--res)');
+    flag(BAND[2].y,fmt(Iout(T),3)+' мА','var(--cur)');
+    flag(BAND[3].y,fmt(Disp(T),1)+' °C','var(--disp)');
+    if(T>=eA&&T<=eB){
+      const e=errAt(T), ye=svg._yE(Math.min(e,errMax));
+      el('circle',{cx:x,cy:ye,r:4,fill:'var(--err)',stroke:'var(--panel)','stroke-width':1.5},dynG);
+      flag(ye-11,'+'+fmt(e,2)+' °C','var(--err)');
+    }
+  }
+
+  const $=id=>document.getElementById(id);
+  const inT=$('inT'), inR=$('inR'), inI=$('inI'), inD=$('inD');
+  const tx0=$('tx0'), tx1=$('tx1'), d0=$('d0'), d1=$('d1');
+
+  function cfgFields(){
+    for(const [e,k] of [[tx0,'TX0'],[tx1,'TX1'],[d0,'D0'],[d1,'D1']])
+      if(document.activeElement!==e)e.value=S[k];
+    $('mLin').setAttribute('aria-pressed',S.lin);
+    $('mRaw').setAttribute('aria-pressed',!S.lin);
+    $('a385').setAttribute('aria-pressed',S.alpha==='385');
+    $('a391').setAttribute('aria-pressed',S.alpha==='391');
+  }
+
+  function matchStatus(){
+    const box=$('match');
+    const same=Math.abs(S.D0-S.TX0)<1e-9&&Math.abs(S.D1-S.TX1)<1e-9;
+    let m=0; for(let t=S.TX0;t<=S.TX1;t+=0.5)m=Math.max(m,errAt(t));
+    const k=(S.D1-S.D0)/(S.TX1-S.TX0);
+    const sh=S.TX0===0?'t':`(t ${S.TX0<0?'+':'−'} ${fnum(Math.abs(S.TX0))})`;
+    const kTxt=Math.abs(k-1)<1e-9?'':String(+k.toFixed(3)).replace('.',',')+'·';
+    const law=`${fnum(S.D0)} + ${kTxt}${sh}`;
+    let cls,tag,html;
+    if(same&&S.lin){cls='ok';tag='согласовано';html='Пределы прибора совпадают с преобразователем, прибор показывает истинную температуру.';}
+    else if(same){cls='warn';tag='нелинейность';html=`Пределы совпадают, но преобразователь не линеаризует: прибор завышает до +${fmtc(m,2)} °C в середине диапазона.`;}
+    else{cls='bad';tag='не согласовано';
+      const ex=100, ie=Iraw(ex), dv=DofI(clampI(ie));
+      html=`Прибор показывает <code>${law.replace('-','−')}</code>${S.lin?'':' плюс нелинейность'}. При 100 °C на приборе ${fmtc(dv,1)} °C${ie>20||ie<4?' (ток вне 4–20 мА)':''}.`;}
+    box.className='status '+cls;
+    box.innerHTML=`<b>${tag}</b><span>${html}</span>`;
+  }
+
+  function update(){
+    const r=Rt(T), i=Iout(T), ir=Iraw(T), dv=Disp(T);
+    if(document.activeElement!==inT) inT.value=T.toFixed(1);
+    if(document.activeElement!==inR) inR.value=r.toFixed(2);
+    if(document.activeElement!==inI) inI.value=i.toFixed(3);
+    if(document.activeElement!==inD) inD.value=dv.toFixed(1);
+    const de=dv-T;
+    const dState=ir>20?'перегруз · ':(ir<4?'ниже шкалы · ':'');
+    $('dErr').textContent=dState+(Math.abs(de)<0.05?'совпадает с истинной':`${de>0?'+':''}${fmtc(de,1)} °C от истинной`);
+    const pc=fmtc((i-4)/16*100,1)+' %';
+    $('pct').textContent=ir>=IHI?`${pc} · насыщение 20,5 (NE43)`:(ir<=ILO?`${pc} · насыщение 3,8 (NE43)`:(ir>20?`${pc} · выше 20 мА`:(ir<4?`${pc} · ниже 4 мА`:`${pc} шкалы`)));
+    $('rRange').textContent=`${fmtc(Rt(TMIN),2)} … ${fmtc(Rt(TMAX),2)} Ω на краях`;
+    const span=S.TX1-S.TX0, s=dRt(T);
+    $('span').textContent=`16 мА / ${fnum(span)} °C`;
+    $('spanP').textContent=S.lin
+      ?`${fmtc(16/span,5)} мА/°C, т.е. ${fmtc(span/16,3)} °C на 1 мА. Вне ${fnum(S.TX0)}…${fnum(S.TX1)} °C ток выходит за 4–20 мА и упирается в 3,8 / 20,5 мА (NAMUR NE43).`
+      :`Ток пропорционален сопротивлению: ${fmtc(RX0(),2)}…${fmtc(RX1(),2)} Ω → 4…20 мА, ${fmtc(16/(RX1()-RX0()),5)} мА/Ω. Насыщение 3,8 / 20,5 мА (NE43).`;
+    $('sens').textContent=`${fmtc(s,4)} Ω/°C`;
+    const iRaw=ItxRaw(T), iL=ItxLin(T), tl=Tchord(T), e=tl-T;
+    $('lin').textContent=`${e>=0?'+':''}${fmtc(e,2)} °C  (${fmtc(iRaw,3)} мА)`;
+    $('linP').textContent=`Если преобразователь ${fnum(S.TX0)}…${fnum(S.TX1)} °C масштабирует ток линейно по сопротивлению ${fmtc(RX0(),2)}…${fmtc(RX1(),2)} Ω, он выдаст ${fmtc(iRaw,3)} мА вместо ${fmtc(iL,3)} мА, что соответствует ${fmtc(tl,2)} °C. Максимум ошибки около середины диапазона.`;
+    const a=.15+.002*Math.abs(T), b=.30+.005*Math.abs(T);
+    $('tol').textContent=`±${fmtc(a,2)} / ±${fmtc(b,2)} °C  ≈ ±${fmtc(a*s,3)} / ±${fmtc(b*s,3)} Ω`;
+    svg.setAttribute('aria-valuenow',T.toFixed(1));
+    svg.setAttribute('aria-valuetext',`${fmtc(T,1)} °C, ${fmtc(r,2)} Ω, ${fmtc(i,3)} мА, прибор ${fmtc(dv,1)} °C`);
+    drawDyn();
+  }
+
+  function formula(){
+    const k=COEF[S.alpha], sg=v=>v<0?`+ ${fnum(-v)}`:`− ${fnum(v)}`;
+    $('formula').innerHTML=
+      `Расчёт по Каллендару–Ван Дюзену (${k.name}): <code>R(t) = R₀·[1 + A·t + B·t² + C·(t − 100)·t³]</code>, член C только при t &lt; 0 °C; `+
+      `R₀ = 100 Ω, A = ${k.A.toExponential(4)}, B = ${k.B.toExponential(3)}, C = ${k.C.toExponential(3)}. `+
+      `Ток: <code>I = 4 + 16·(t ${sg(S.TX0)})/${fnum(S.TX1-S.TX0)}</code> мА с линеаризацией или <code>I = 4 + 16·(R − R(${fnum(S.TX0)}))/(R(${fnum(S.TX1)}) − R(${fnum(S.TX0)}))</code> линейно по Ω, ограничение 3,8…20,5 мА. `+
+      `Прибор: <code>t<sub>пр</sub> = ${fnum(S.D0)} + ${fnum(S.D1-S.D0)}·(I − 4)/16</code>. Обратный пересчёт Ω → °C методом Ньютона.`;
+  }
+
+  function refresh(){save();cfgFields();formula();matchStatus();drawStatic();update();}
+
+  // range inputs
+  function setRange(k0,k1,a,b){
+    if(!isFinite(a)||!isFinite(b))return false;
+    if(k0==='TX0'){a=Math.max(-200,Math.min(850,a));b=Math.max(-200,Math.min(850,b));}
+    if(b-a<1)return false;
+    S[k0]=a;S[k1]=b;return true;
+  }
+  const num=e=>parseFloat(String(e.value).replace(',','.'));
+  function onRange(e0,e1,k0,k1){
+    const f=()=>{setRange(k0,k1,num(e0),num(e1));refresh();e0.value=S[k0];e1.value=S[k1];};
+    for(const e of [e0,e1]){e.addEventListener('change',f);e.addEventListener('keydown',ev=>{if(ev.key==='Enter')e.blur();});}
+  }
+  onRange(tx0,tx1,'TX0','TX1');
+  onRange(d0,d1,'D0','D1');
+  document.querySelectorAll('[data-tx]').forEach(bn=>bn.addEventListener('click',()=>{
+    const [a,b,m]=bn.dataset.tx.split(',');S.TX0=+a;S.TX1=+b;S.lin=m==='lin';refresh();}));
+  document.querySelectorAll('[data-d]').forEach(bn=>bn.addEventListener('click',()=>{
+    const [a,b]=bn.dataset.d.split(',');S.D0=+a;S.D1=+b;refresh();}));
+  $('dMatch').addEventListener('click',()=>{S.D0=S.TX0;S.D1=S.TX1;refresh();});
+
+  // value inputs
+  inT.addEventListener('change',()=>{const v=num(inT);if(isFinite(v))T=clampT(v);update();inT.value=T.toFixed(1);});
+  inR.addEventListener('change',()=>{const v=num(inR);if(isFinite(v))T=clampT(TofR(v));update();inR.value=Rt(T).toFixed(2);});
+  inI.addEventListener('change',()=>{const v=num(inI);if(isFinite(v))T=clampT(TofIraw(clampI(v)));update();inI.value=Iout(T).toFixed(3);});
+  inD.addEventListener('change',()=>{const v=num(inD);if(isFinite(v))T=clampT(TofIraw(clampI(IofD(v))));update();inD.value=Disp(T).toFixed(1);});
+  [inT,inR,inI,inD].forEach(e=>e.addEventListener('keydown',ev=>{if(ev.key==='Enter')e.blur();}));
+  [inT,inR,inI,inD].forEach(e=>e.addEventListener('blur',()=>update()));
+
+  // drag
+  function fromEvent(ev){const r=svg.getBoundingClientRect();const x=(ev.clientX-r.left)*(W/r.width);T=Math.round(clampT(tX(x))*10)/10;update();}
+  svg.addEventListener('pointerdown',ev=>{svg.setPointerCapture(ev.pointerId);svg.focus({preventScroll:true});fromEvent(ev);});
+  svg.addEventListener('pointermove',ev=>{if(svg.hasPointerCapture(ev.pointerId))fromEvent(ev);});
+  svg.addEventListener('keydown',ev=>{
+    let d=0;
+    if(ev.key==='ArrowRight'||ev.key==='ArrowUp')d=ev.shiftKey?1:.1;
+    else if(ev.key==='ArrowLeft'||ev.key==='ArrowDown')d=ev.shiftKey?-1:-.1;
+    else if(ev.key==='PageUp')d=10; else if(ev.key==='PageDown')d=-10;
+    else if(ev.key==='Home'){T=TMIN;update();ev.preventDefault();return;}
+    else if(ev.key==='End'){T=TMAX;update();ev.preventDefault();return;}
+    else return;
+    ev.preventDefault(); T=Math.round(clampT(T+d)*10)/10; update();
+  });
+
+  $('a385').onclick=()=>{S.alpha='385';refresh();};
+  $('a391').onclick=()=>{S.alpha='391';refresh();};
+  $('mLin').onclick=()=>{S.lin=true;refresh();};
+  $('mRaw').onclick=()=>{S.lin=false;refresh();};
+
+  let rz; new ResizeObserver(()=>{cancelAnimationFrame(rz);rz=requestAnimationFrame(()=>{drawStatic();update();});}).observe(svg.parentElement);
+  if(!(S.TX1-S.TX0>=1))Object.assign(S,{TX0:-50,TX1:150});
+  if(!(S.D1-S.D0>=1))Object.assign(S,{D0:-50,D1:250});
+  refresh();
+})();
+</script>
+
+</body>
+</html>
